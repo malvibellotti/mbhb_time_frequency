@@ -38,11 +38,8 @@ except ImportError:
 from scipy.stats import gaussian_kde
 
 def generate_astrophysical_prior(catalog_params, num_samples):
-    """
-    Learns the continuous multi-dimensional distribution of the empirical catalog
-    and generates `num_samples` new, unique events drawn from that distribution.
-    """
-    print(f"-> Fitting Kernel Density Estimator to {len(catalog_params)} catalog events...")
+
+    print(f"-> fit kde to {len(catalog_params)} of alberto's events...")
     
    
     log_m1 = np.log10(catalog_params[:, 0])
@@ -57,12 +54,12 @@ def generate_astrophysical_prior(catalog_params, num_samples):
     kde = gaussian_kde(training_data)
     
     
-    print(f"-> Sampling {num_samples} new events from the continuous prior...")
+    print(f"-> then i sample {num_samples} new events from the kde estimation of the prior...")
     samples = kde.resample(num_samples)
     
-    samples[0, :] = np.clip(samples[0, :], np.min(log_m1), np.max(log_m1)) # Clamp Mass
-    samples[1, :] = np.clip(samples[1, :], 0.01, 1.0)                      # Clamp q
-    samples[2, :] = np.clip(samples[2, :], np.min(log_dist), np.max(log_dist)) # Clamp Dist
+    samples[0, :] = np.clip(samples[0, :], np.min(log_m1), np.max(log_m1)) 
+    samples[1, :] = np.clip(samples[1, :], 0.01, 1.0)                      
+    samples[2, :] = np.clip(samples[2, :], np.min(log_dist), np.max(log_dist)) 
     samples[3, :] = np.clip(samples[3, :], 0.0, np.pi)
     
     new_params = np.zeros((num_samples, 11))
@@ -72,26 +69,17 @@ def generate_astrophysical_prior(catalog_params, num_samples):
     new_params[:, 2] = 10**samples[2, :] 
     new_params[:, 4] = samples[3, :]     
     
-    # sky localization and orientation - UNUIFORM IN THE SKY!!
-   
     new_params[:, 5] = np.random.uniform(0, 2*np.pi, num_samples)
     new_params[:, 6] = np.arcsin(np.random.uniform(-1, 1, num_samples)) 
     new_params[:, 7] = np.random.uniform(0, np.pi, num_samples)
     new_params[:, 8] = np.random.uniform(0, 2*np.pi, num_samples)
     
-
-    # FIX THE SPINS TO ZERO!
-
     new_params[:, 9] = 0.0
     new_params[:, 10] = 0.0 
     return new_params
 
-
-# ======================================================================
-# ALBERTO'S JSON PARSER
-# ======================================================================
 def extract_alberto_json(filepath):
-    """ Reads Alberto's lisabeta JSON files using the exact keys discovered """
+    """I HAVE TO READ ALBERTO'S JSON """
     with open(filepath, 'r') as f:
         data = json.load(f)
         
@@ -184,10 +172,7 @@ def extract_alberto_json(filepath):
 
 
 def load_alberto_population(repo_path, pop_name="Pop3"):
-    """
-    1. Loads ALL 1272 json files to train the KDE Prior.
-    2. Loads the specific 148 .h5 events with their exact modes for the Test Set.
-    """
+    
     h5_path = os.path.join(repo_path, "data_for_Malvina.h5")
     json_dir = os.path.join(repo_path, pop_name, "json")
     
@@ -200,7 +185,6 @@ def load_alberto_population(repo_path, pop_name="Pop3"):
         except: pass
     
     full_catalog_params = np.array(full_catalog_params)
-    print(f"-> Extracted {len(full_catalog_params)} total events for KDE fitting.")
     
     test_params = []
     test_modes =[]
@@ -213,7 +197,6 @@ def load_alberto_population(repo_path, pop_name="Pop3"):
                     ev = pop_group[strid]
                     stsi = int(ev['StSi_index'][()])
                     
-                    # Determine Mode
                     m = 0
                     if ev['1mode_5p'][()] == 1: m = 1
                     elif ev['2modes_5p'][()] == 1: m = 2
@@ -236,9 +219,7 @@ def load_alberto_population(repo_path, pop_name="Pop3"):
     print(f"-> Extracted {len(test_params)} true benchmark events with known modes.")
     
     return full_catalog_params, test_params, test_modes
-# ======================================================================
-# DATASET GENERATOR
-# ======================================================================
+
 class DatasetGenerator:
     def __init__(self, dt=10.0, T_obs=172800.0, T_gen=2592000.0, noise_type='psd_whitened', use_gpu=False):
         self.dt = dt
@@ -383,7 +364,7 @@ class DatasetGenerator:
             # n_freq = 256  
             freqs = np.fft.rfftfreq(nperseg, d=self.dt)
 
-            f_min = 5e-5       # ATTENTION !! IF YOU CHANGE HERE CHANGE ALSO AT LINE 550
+            f_min = 5e-5       # ATTENTION !! IF YOU CHANGE HERE CHANGE ALSO AT LINE 478
             f_max = 1e-2
 
             mask = (freqs >= f_min) & (freqs <= f_max)
@@ -494,7 +475,7 @@ class DatasetGenerator:
                     
                     freqs = np.fft.rfftfreq(nperseg, d=self.dt)
                     
-                    f_min = 5e-5       # ATTENTION !! IF YOU CHANGE HERE CHANGE ALSO AT LINE 550
+                    f_min = 5e-5       # ATTENTION !! IF YOU CHANGE HERE CHANGE ALSO AT LINE 367
                     f_max = 1e-2
 
 
@@ -537,7 +518,7 @@ class DatasetGenerator:
                             phase_E = torch.angle(Z_E)
                             phase_diff = torch.angle(cross_AE)
 
-                            # I WOULD UNWRAP PHASE !!!!!!
+                            # I COULD UNWRAP PHASE !!!!!!
                             
                             data_out = torch.stack([mag_A, mag_E, phase_A, phase_E, phase_diff], dim=1).cpu().numpy()
                             
@@ -839,9 +820,8 @@ def main():
     predefined_modes = None
     
     if args.alberto_repo != "":
-        print(f"\n--- Loading Population from Alberto's Repo: {args.alberto_pop} ---")
+        print(f"\n--- Loading population from alberto's repository: {args.alberto_pop} ---")
         
-        # Load the massive catalog for the KDE, and the specific benchmark events for testing
         full_catalog_params, test_params, test_modes = load_alberto_population(args.alberto_repo, pop_name=args.alberto_pop)
         
         if len(full_catalog_params) == 0:
@@ -880,7 +860,7 @@ def main():
                  predefined_population=predefined_pop, predefined_modes=predefined_modes)
 
     # if args.N < 10 :
-    #     plot_generated_sample(args.out, out_img=f"plot_{args.repr_type}_{args.output_format}.png")
+    #     plot_generated_sample(args.out, out_img=f"plot_{argßs.repr_type}_{args.output_format}.png")
     plot_generated_sample(args.out, out_img=f"plot_{args.repr_type}_{args.output_format}.png")
 
 if __name__ == "__main__":
