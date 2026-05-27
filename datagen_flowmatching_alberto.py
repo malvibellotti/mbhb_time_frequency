@@ -35,6 +35,12 @@ try:
 except ImportError:
     has_nnaudio = False
 
+try:
+    from qtam import SingleQTransform
+    has_qtam = True
+except ImportError:
+    has_qtam = False
+
 from scipy.stats import gaussian_kde
 
 def generate_astrophysical_prior(catalog_params, num_samples):
@@ -333,13 +339,14 @@ class DatasetGenerator:
                  repr_type='stft', channels='XYZ', nperseg=1024, noverlap=768, 
                  J=8, Q=8, T=1, c1=8, ord_min=1, ord_max=5, nv=16, phase_info=False, 
                  ssq_downsample=64, output_format='real_imag', apply_log=False,
+                 n_freq_qtam=64, n_time_qtam=1024,
                  predefined_population=None, predefined_modes=None):
                      
         torch_device = "cuda" if self.use_gpu else "cpu"
         n_ch = 3 if channels == 'XYZ' else 2
         time_ds = int(ssq_downsample)
 
-        if channels == 'AE' and repr_type in ['stft', 'cwt', 'cqt']:
+        if channels == 'AE' and repr_type in ['stft', 'cwt', 'cqt', 'qtam']:
             if output_format == 'mag_phase': 
                 n_ch_out = 3    # [Mag A, Mag E, Phase Diff]
             elif output_format == 'real_imag': 
@@ -351,7 +358,7 @@ class DatasetGenerator:
             else: 
                 n_ch_out = 2    # [Mag A, Mag E]
         
-        elif repr_type in ['stft', 'cwt', 'cqt']:
+        elif repr_type in ['stft', 'cwt', 'cqt', 'qtam']:
             n_ch_out = n_ch * 2 if output_format in ['mag_phase', 'mag_phase_all', 'real_imag'] else n_ch
         else:
             n_ch_out = n_ch * 2 if phase_info else n_ch
@@ -385,6 +392,24 @@ class DatasetGenerator:
             dummy_cqt = self.cqt_layer(dummy)
             n_freq = dummy_cqt.shape[1]
             n_time = dummy_cqt.shape[2]
+
+        elif repr_type == 'qtam':
+            if not has_qtam: raise ImportError("You must `pip install qtam` and fix the dependencies to use qtam.")
+            f_min_qtam = 5e-5
+            f_max_qtam = self.fs / 2.0  # Up to Nyquist to capture the merger
+            self.qtransform = SingleQTransform(
+                duration=self.T_obs,
+                sample_rate=self.fs,
+                q=Q,
+                frange=[f_min_qtam, f_max_qtam],
+                logf=True,
+                num_freq=n_freq_qtam,
+                max_window_size='auto'
+            ).to(torch_device).to(dtype=torch.float32)
+            dummy = torch.zeros(1, self.N_obs, device=torch_device, dtype=torch.float32)
+            dummy_qtam = self.qtransform(dummy, polar_mode=False, complex_mode=True, num_time=n_time_qtam)
+            n_freq = dummy_qtam.shape[2]
+            n_time = dummy_qtam.shape[3]
 
         elif repr_type == 'cwt':
             dummy = np.zeros(self.N_obs)
@@ -453,7 +478,7 @@ class DatasetGenerator:
                 else:
                     mix_td = self.xp.stack([mix_td_A, mix_td_E], axis=1)
                 
-                if repr_type in['stft', 'scattering', 'cqt']:
+                if repr_type in ['stft', 'scattering', 'cqt', 'qtam']:
                     mix_torch = torch.as_tensor(mix_td, device=torch_device, dtype=torch.float32)
                     mix_torch_flat = mix_torch.view(current_bs * n_ch, self.N_obs)
                 
@@ -544,9 +569,13 @@ class DatasetGenerator:
 
                             cross_AE = Z_A * torch.conj(Z_E)
 
-                            cross_norm = cross_AE / (
-                                torch.abs(Z_A) * torch.abs(Z_E) 
-                            )
+                            # cross_norm = cross_AE / (
+                            #     torch.abs(Z_A) * torch.abs(Z_E) 
+                            # )      #! so, this was normalizing each pixel, so giving us a lot of -1,1 s, now i want to try and normlize by the maximum of the cross spectrum
+
+                            
+                            max_cross = torch.max(torch.abs(cross_AE))
+                            cross_norm = cross_AE / (max_cross)
 
                             cos_dphi = torch.real(cross_norm)
                             sin_dphi = torch.imag(cross_norm)
@@ -568,6 +597,44 @@ class DatasetGenerator:
                         data_out = mag.cpu().numpy()                  
 
                 
+                elif repr_type == 'qtam':
+                    Z_complex = self.qtransform(mix_torch_flat, polar_mode=False, complex_mode=True, num_time=n_time)
+                    Z_complex = Z_complex.squeeze(1).view(current_bs, n_ch, n_freq, n_time)
+                    
+                    if channels == 'AE':
+                        Z_A = Z_complex[:, 0, :, :]
+                        Z_E = Z_complex[:, 1, :, :]
+                        
+                        mag_A = torch.abs(Z_A) 
+                        mag_E = torch.abs(Z_E) 
+                        
+                        cross_AE = Z_A * torch.conj(Z_E)
+                        
+                        if apply_log:
+                            mag_A = torch.log10(mag_A )
+                            mag_E = torch.log10(mag_E )
+
+                        if output_format == 'ampl_rel_phase':
+                            max_cross = torch.max(torch.abs(cross_AE))
+                            cross_norm = cross_AE / (max_cross )
+
+                            cos_dphi = torch.real(cross_norm)
+                            sin_dphi = torch.imag(cross_norm)
+
+                            data_out = torch.stack([
+                                mag_A,
+                                mag_E,
+                                cos_dphi,
+                                sin_dphi
+                            ], dim=1).cpu().numpy()
+                        else: # Fallback to magnitude only
+                            data_out = torch.stack([mag_A, mag_E], dim=1).cpu().numpy()
+                    else:
+                        # IF WE WANT XYZ
+                        mag = torch.abs(Z_complex)
+                        if apply_log: mag = torch.log10(mag )
+                        data_out = mag.cpu().numpy()
+                
                 elif repr_type == 'cqt':   # found this cool implementation of the q transform in nnAudio !!  
 
                     cqt_raw = self.cqt_layer(mix_torch_flat)
@@ -584,8 +651,9 @@ class DatasetGenerator:
                     #     mag_E = torch.abs(CQT_E)
 
                     #     if apply_log:
-                    #         mag_A = torch.log10(mag_A + 1e-30)
-                    #         mag_E = torch.log10(mag_E + 1e-30)
+                    #         mag_A = torch.log10(mag_A)     
+                    #         mag_E = torch.log10(mag_E)
+                    #         cross_AE = (CQT_A * torch.conj(CQT_E)) / (mag_A_raw * mag_E_raw + 1e-30)
 
                     #     if output_format == 'mag_phase':
                     #         data_out = torch.stack([mag_A, mag_E, phase_diff], dim=1).cpu().numpy()
@@ -759,19 +827,21 @@ def main():
     parser.add_argument("--out", type=str, default="dataset.h5")
     parser.add_argument("--channels", type=str, default="AE", choices=["XYZ", "AE"])
     parser.add_argument("--noise_type", type=str, default="psd_whitened", choices=["gaussian", "psd", "psd_whitened"])
-    parser.add_argument("--repr_type", type=str, default="cqt", choices=["stft", "scattering", "superlets", "ssq", "cwt", "cqt"])
+    parser.add_argument("--repr_type", type=str, default="cqt", choices=["stft", "scattering", "superlets", "ssq", "cwt", "cqt", "qtam"])
     parser.add_argument("--phase_info", action="store_true")
     
     parser.add_argument("--nperseg", type=int, default=1024)
     parser.add_argument("--noverlap", type=int, default=800)
     parser.add_argument("--J", type=int, default=8)
-    parser.add_argument("--Q", type=int, default=8)
+    parser.add_argument("--Q", type=int, default=12, help="Q factor for CQT, QTAM, Scattering")
     parser.add_argument("--T_scat", type=int, default=1)
     parser.add_argument("--c1", type=int, default=8)
     parser.add_argument("--ord_min", type=int, default=1)
     parser.add_argument("--ord_max", type=int, default=5)
     parser.add_argument("--nv", type=int, default=16, help="Bins per octave for CQT/CWT/SSQ")
     parser.add_argument("--ssq_downsample", type=int, default=128, help="Time downsampling for CWT/CQT/SSQ")
+    parser.add_argument("--n_freq_qtam", type=int, default=64, help="Number of frequency bins for QTAM")
+    parser.add_argument("--n_time_qtam", type=int, default=1024, help="Number of time bins for QTAM")
     parser.add_argument("--output_format", type=str, default="real_imag", 
                         choices=["real_imag", "mag_phase", "mag_phase_all", "mag", 'ampl_rel_phase'], 
                         help="Output format for representations.")    
@@ -781,6 +851,11 @@ def main():
     parser.add_argument("--alberto_repo", type=str, default="/sps/lisaf/mbellotti/github/standard-sirens-MBHBs", help="Path to Alberto's cloned repository.")
     parser.add_argument("--alberto_pop", type=str, default="Pop3", choices=["Pop3", "Q3d", "Q3nd"], help="Which population to load.")
     parser.add_argument("--alberto_modes", type=int, default=0, help="Filter by modes (1, 2, or 8). 0 = all.")
+
+
+
+    # IF ONE WANTS TO FIX INTRINSIC PARAMETERS AND VARY ONLY EXTRINSIC ONES (FOR TESTING PURPOSES)
+    parser.add_argument("--fixed_intrinsic", action="store_true", help="Fix m1, m2, dist, and t_ref. Randomize sky angles only.")
 
     args = parser.parse_args()
     use_gpu = (args.device == "cuda" and use_gpu_available)
@@ -819,7 +894,35 @@ def main():
     predefined_pop = None
     predefined_modes = None
     
-    if args.alberto_repo != "":
+
+
+
+
+    if args.fixed_intrinsic:
+        print(f"\n--- Generating FIXED INTRINSIC, RANDOM EXTRINSIC Dataset ({args.N} events) ---")
+        predefined_pop = np.zeros((args.N, 11))
+        
+        # FIXED: M1 = 1e6, M2 = 5e5, Dist = 10 Gpc, T_ref = Middle of 7.5 day window
+        predefined_pop[:, 0] = 5e5 
+        predefined_pop[:, 1] = 0.8   
+        predefined_pop[:, 2] = 15000 * 1e6 * PC_SI
+        
+        predefined_pop[:, 3] = (30 * 24 * 3600) - (7.5 * 24 * 3600 * 0.1) 
+        
+        # RANDOM: Sky Location, Inclination, Polarization, Phase
+        predefined_pop[:, 4] = np.arccos(np.random.uniform(-1, 1, args.N)) # inc
+        predefined_pop[:, 5] = np.random.uniform(0, 2*np.pi, args.N)       # lam
+        predefined_pop[:, 6] = np.arcsin(np.random.uniform(-1, 1, args.N)) # beta
+        predefined_pop[:, 7] = np.random.uniform(0, np.pi, args.N)         # psi
+        predefined_pop[:, 8] = np.random.uniform(0, 2*np.pi, args.N)       # phi_ref
+        
+        predefined_pop[:, 9] = 0.0 # chi1
+        predefined_pop[:, 10] = 0.0 # chi2
+        
+        predefined_modes = np.zeros(args.N, dtype=int)
+
+
+    elif args.alberto_repo != "":
         print(f"\n--- Loading population from alberto's repository: {args.alberto_pop} ---")
         
         full_catalog_params, test_params, test_modes = load_alberto_population(args.alberto_repo, pop_name=args.alberto_pop)
@@ -854,9 +957,10 @@ def main():
     gen.generate(args.N, wave_gen, args.out, args.batch, 
                  repr_type=args.repr_type, channels=args.channels, 
                  nperseg=args.nperseg, noverlap=args.noverlap,
-                 J=args.J, Q=args.Q, T=args.ßT_scat,
+                 J=args.J, Q=args.Q, T=args.T_scat,
                  c1=args.c1, ord_min=args.ord_min, ord_max=args.ord_max, nv=args.nv, phase_info=args.phase_info, 
                  ssq_downsample=args.ssq_downsample, output_format=args.output_format, apply_log=args.apply_log,
+                 n_freq_qtam=args.n_freq_qtam, n_time_qtam=args.n_time_qtam,
                  predefined_population=predefined_pop, predefined_modes=predefined_modes)
 
     # if args.N < 10 :
