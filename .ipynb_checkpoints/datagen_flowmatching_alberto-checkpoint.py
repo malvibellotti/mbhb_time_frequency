@@ -17,7 +17,6 @@ from scipy.interpolate import interp1d
 from astropy.cosmology import Planck18
 
 from bbhx.waveformbuild import BBHWaveformFD
-from bbhx.utils.transform import *
 from bbhx.utils.constants import PC_SI, YRSID_SI
 from lisatools.detector import EqualArmlengthOrbits
 from lisatools.sensitivity import get_sensitivity
@@ -44,92 +43,22 @@ except ImportError:
 
 from scipy.stats import gaussian_kde
 
-# def generate_astrophysical_prior(catalog_params, num_samples):
-
-#     print(f"-> fit kde to {len(catalog_params)} of alberto's events...")
-    
-   
-#     log_m1 = np.log10(catalog_params[:, 0])
-#     q = catalog_params[:, 1]
-#     log_dist = np.log10(catalog_params[:, 2])
-#     inc = catalog_params[:, 4] 
-    
-    
-#     training_data = np.vstack([log_m1, q, log_dist, inc])
-    
-    
-#     kde = gaussian_kde(training_data)
-    
-    
-#     print(f"-> then i sample {num_samples} new events from the kde estimation of the prior...")
-#     samples = kde.resample(num_samples)
-    
-#     samples[0, :] = np.clip(samples[0, :], np.min(log_m1), np.max(log_m1)) 
-#     samples[1, :] = np.clip(samples[1, :], 0.01, 1.0)                      
-#     samples[2, :] = np.clip(samples[2, :], np.min(log_dist), np.max(log_dist)) 
-#     samples[3, :] = np.clip(samples[3, :], 0.0, np.pi)
-    
-#     new_params = np.zeros((num_samples, 11))
-    
-#     new_params[:, 0] = 10**samples[0, :] 
-#     new_params[:, 1] = samples[1, :]     
-#     new_params[:, 2] = 10**samples[2, :] 
-#     new_params[:, 4] = samples[3, :]     
-    
-#     new_params[:, 5] = np.random.uniform(0, 2*np.pi, num_samples)
-#     new_params[:, 6] = np.arcsin(np.random.uniform(-1, 1, num_samples)) 
-#     new_params[:, 7] = np.random.uniform(0, np.pi, num_samples)
-#     new_params[:, 8] = np.random.uniform(0, 2*np.pi, num_samples)
-    
-#     new_params[:, 9] = 0.0
-#     new_params[:, 10] = 0.0 
-#     return new_params
-
-# def extract_alberto_json(filepath):
-#     """I HAVE TO READ ALBERTO'S JSON """
-#     with open(filepath, 'r') as f:
-#         data = json.load(f)
-        
-#     p = data['source_params']
-#     w = data['waveform_params']
-
-#     Deltat = float(p['Deltat']) # IS THIS TREF??  NOPE
-#     t0 = float(w['t0'])   # NOT SURE THIS IS TREF EITHER.   ---> lisabeta says t_ref = t0 * years + deltat
-
-#     mc = float(p['Mchirp'])
-#     q_json = float(p['q'])
-    
-#     m_A = mc * (1.0 + q_json)**0.2 / (q_json**0.6)       #### ARE WE SURE THIS IS THE CORRECT WAY FROM MC AND Q TO M1?
-#     m_B = m_A * q_json
-    
-#     m1 = max(m_A, m_B)
-#     m2 = min(m_A, m_B)
-#     q_final = m2 / m1 
-
-#     dist_mpc = float(p['dist'])
-#     dist = dist_mpc * 1e6 * PC_SI
-
-#     inc = float(p['inc'])
-#     lam = float(p['lambda'])
-#     beta = float(p['beta'])
-#     psi = float(p['psi'])
-#     phi_ref = float(p['phi'])
-#     chi1 = float(p['chi1'])
-#     chi2 = float(p['chi2'])
-    
-#     return[m1, q_final, dist, Deltat, t0, inc, lam, beta, psi, phi_ref, chi1, chi2]
-
-
 def generate_astrophysical_prior(catalog_params, num_samples):
+
     print(f"-> fit kde to {len(catalog_params)} of alberto's events...")
     
+   
     log_m1 = np.log10(catalog_params[:, 0])
     q = catalog_params[:, 1]
     log_dist = np.log10(catalog_params[:, 2])
-    inc = catalog_params[:, 5]  # <--- MUST BE 5 NOW! 4 is t0.
+    inc = catalog_params[:, 4] 
+    
     
     training_data = np.vstack([log_m1, q, log_dist, inc])
+    
+    
     kde = gaussian_kde(training_data)
+    
     
     print(f"-> then i sample {num_samples} new events from the kde estimation of the prior...")
     samples = kde.resample(num_samples)
@@ -139,51 +68,45 @@ def generate_astrophysical_prior(catalog_params, num_samples):
     samples[2, :] = np.clip(samples[2, :], np.min(log_dist), np.max(log_dist)) 
     samples[3, :] = np.clip(samples[3, :], 0.0, np.pi)
     
-    new_params = np.zeros((num_samples, 12))  # <--- MUST BE 12
+    new_params = np.zeros((num_samples, 11))
     
     new_params[:, 0] = 10**samples[0, :] 
     new_params[:, 1] = samples[1, :]     
     new_params[:, 2] = 10**samples[2, :] 
+    new_params[:, 4] = samples[3, :]     
     
-    # Give random KDE samples a t_ref and default t0 to 0.0
-    new_params[:, 3] = (30*24*3600) - (7.5*24*3600) * np.random.uniform(0.1, 0.5, num_samples)
-    new_params[:, 4] = 0.0 
+    new_params[:, 5] = np.random.uniform(0, 2*np.pi, num_samples)
+    new_params[:, 6] = np.arcsin(np.random.uniform(-1, 1, num_samples)) 
+    new_params[:, 7] = np.random.uniform(0, np.pi, num_samples)
+    new_params[:, 8] = np.random.uniform(0, 2*np.pi, num_samples)
     
-    new_params[:, 5] = samples[3, :]     
-    new_params[:, 6] = np.random.uniform(0, 2*np.pi, num_samples)
-    new_params[:, 7] = np.arcsin(np.random.uniform(-1, 1, num_samples)) 
-    new_params[:, 8] = np.random.uniform(0, np.pi, num_samples)
-    new_params[:, 9] = np.random.uniform(0, 2*np.pi, num_samples)
-    
-    new_params[:, 10] = 0.0
-    new_params[:, 11] = 0.0 
+    new_params[:, 9] = 0.0
+    new_params[:, 10] = 0.0 
     return new_params
 
 def extract_alberto_json(filepath):
+    """I HAVE TO READ ALBERTO'S JSON """
     with open(filepath, 'r') as f:
         data = json.load(f)
         
     p = data['source_params']
-    w = data['waveform_params']
-
-    Deltat = float(p['Deltat'])
-    t0 = float(w['t0'])
-    
-    # Absolute physical time in LISA frame
-    t_ref = t0 * YRSID_SI + Deltat
 
     mc = float(p['Mchirp'])
     q_json = float(p['q'])
     
-    m_A = mc * (1.0 + q_json)**0.2 / (q_json**0.6)
+    m_A = mc * (1.0 + q_json)**0.2 / (q_json**0.6)       #### ARE WE SURE THIS IS THE CORRECT WAY FROM MC AND Q TO M1?
     m_B = m_A * q_json
+    
     m1 = max(m_A, m_B)
     m2 = min(m_A, m_B)
     q_final = m2 / m1 
+    
 
     dist_mpc = float(p['dist'])
     dist = dist_mpc * 1e6 * PC_SI
-
+        
+    t_ref = float(p['Deltat'])   # IS THIS TREF??  
+    
     inc = float(p['inc'])
     lam = float(p['lambda'])
     beta = float(p['beta'])
@@ -192,8 +115,7 @@ def extract_alberto_json(filepath):
     chi1 = float(p['chi1'])
     chi2 = float(p['chi2'])
     
-    # Return 12 items! t0 is kept purely for the SSB transformation later
-    return [m1, q_final, dist, t_ref, t0, inc, lam, beta, psi, phi_ref, chi1, chi2]
+    return[m1, q_final, dist, t_ref, inc, lam, beta, psi, phi_ref, chi1, chi2]
 
 # def load_alberto_population(repo_path, pop_name="Pop3", filter_modes=0):
 #     h5_path = os.path.join(repo_path, "data_for_Malvina.h5")
@@ -331,74 +253,6 @@ class DatasetGenerator:
             self.psd_E = self.psd_A
             self.sigma_fd_E = self.sigma_fd_A
             
-    # def get_mbhb_batch(self, wave_gen, batch_size, predefined_params=None):
-    #     if predefined_params is not None:
-    #         m1 = self.xp.array(predefined_params[:, 0])
-    #         q = self.xp.array(predefined_params[:, 1])
-    #         m2 = m1 * q
-    #         dist = self.xp.array(predefined_params[:, 2])
-            
-    #         # I had to overwrite Alberto's t_ref because it was out of ,my wiindow of 30 days!!!!!!
-    #         # t_ref = self.xp.full(batch_size, self.T_gen) - self.T_obs * self.xp.random.uniform(0.1, 0.5, batch_size)
-    #         t_ref = self.xp.array(predefined_params[:, 3])
-
-    #         inc = self.xp.array(predefined_params[:, 4])
-    #         lam = self.xp.array(predefined_params[:, 5])
-    #         beta = self.xp.array(predefined_params[:, 6])
-    #         psi = self.xp.array(predefined_params[:, 7])
-    #         phi_ref = self.xp.array(predefined_params[:, 8])
-    #         chi1 = self.xp.array(predefined_params[:, 9])
-    #         chi2 = self.xp.array(predefined_params[:, 10])
-    #         # convert LISA -> SSB before passing to BBHx
-    #         t_ref_ssb, lam_ssb, beta_ssb, psi_ssb = LISA_to_SSB(t_ref, lam, beta, psi, t0=0.0)
-    #         # inc doesn't change frame
-            
-            
-    #         if m1[0] == 0:
-    #             print(f"[ERROR] m1 is 0.0. Could not find the mass!")
-    #     else:
-    #         m1 = 10**self.xp.random.uniform(5, 6, batch_size)
-    #         q = self.xp.random.uniform(0.1, 1, batch_size)
-    #         m2 = m1 * q
-    #         dist = self.xp.random.uniform(self.dist_min, self.dist_max, batch_size)
-    #         t_ref = self.xp.full(batch_size, self.T_gen) - self.T_obs * self.xp.random.uniform(0.1, 0.5, batch_size)
-    #         inc = self.xp.arccos(self.xp.random.uniform(-1, 1, batch_size))
-    #         lam = self.xp.random.uniform(0, 2*np.pi, batch_size)
-    #         beta = self.xp.arcsin(self.xp.random.uniform(-1, 1, batch_size))
-    #         psi = self.xp.random.uniform(0, np.pi, batch_size)
-    #         phi_ref = self.xp.random.uniform(0, 2*np.pi, batch_size)
-    #         chi1 = self.xp.zeros(batch_size)
-    #         chi2 = self.xp.zeros(batch_size)
-
-    #     f_ref = self.xp.zeros(batch_size) 
-    #     modes =[(2,2), (2,1), (3,3), (3,2), (4,4), (4,3)]
-        
-    #     freqs_in = cp.asarray(self.freqs_gen) if self.use_gpu else self.freqs_gen
-    #     t_obs_end_yrs = float(self.T_gen) / YRSID_SI
-
-    #     wave_out = wave_gen(
-    #         m1, m2, chi1, chi2, dist,
-    #         phi_ref, f_ref, inc, lam, beta, psi, t_ref,
-    #         freqs=freqs_in, modes=modes, direct=False, fill=True, 
-    #         squeeze=False, length=self.N_gen,
-    #         t_obs_start=0.0, t_obs_end=1.0       ###!!! CHECK THIS !! t_obs_end should be t_ref + time i want to look at after merger/ year. T start should be the fraction of the year from which i want to start??        
-    #     )
-        
-    #     wave_fd_A = wave_out[:, 0, :] 
-    #     wave_fd_E = wave_out[:, 1, :]
-        
-    #     if self.use_gpu:
-    #         wave_td_A = cp.fft.irfft(wave_fd_A, n=self.N_gen, axis=-1)[:, -self.N_obs:]
-    #         wave_td_E = cp.fft.irfft(wave_fd_E, n=self.N_gen, axis=-1)[:, -self.N_obs:]
-    #         params = cp.asnumpy(cp.stack([m1, q, dist, t_ref, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1))
-    #     else:
-    #         wave_td_A = np.fft.irfft(wave_fd_A, n=self.N_gen, axis=-1)[:, -self.N_obs:]
-    #         wave_td_E = np.fft.irfft(wave_fd_E, n=self.N_gen, axis=-1)[:, -self.N_obs:]
-    #         params = np.stack([m1, q, dist, t_ref, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1)
-            
-    #     return wave_td_A, wave_td_E, params
-
-
     def get_mbhb_batch(self, wave_gen, batch_size, predefined_params=None):
         if predefined_params is not None:
             m1 = self.xp.array(predefined_params[:, 0])
@@ -408,23 +262,15 @@ class DatasetGenerator:
             
             # I had to overwrite Alberto's t_ref because it was out of ,my wiindow of 30 days!!!!!!
             # t_ref = self.xp.full(batch_size, self.T_gen) - self.T_obs * self.xp.random.uniform(0.1, 0.5, batch_size)
-            # t_ref = self.xp.array(predefined_params[:, 3])
-            Deltat = predefined_params[:,3]
-            t0     = predefined_params[:,4]
+            t_ref = self.xp.array(predefined_params[:, 3])
 
-            inc = self.xp.array(predefined_params[:, 5])
-            lam = self.xp.array(predefined_params[:, 6])
-            beta = self.xp.array(predefined_params[:, 7])
-            psi = self.xp.array(predefined_params[:, 8])
-            phi_ref = self.xp.array(predefined_params[:, 9])
-            chi1 = self.xp.array(predefined_params[:, 10])
-            chi2 = self.xp.array(predefined_params[:, 11])
-
-            tL = t0 * YRSID_SI + Deltat
-            
-            # convert LISA -> SSB before passing to BBHx
-            t_ref_ssb, lam_ssb, beta_ssb, psi_ssb = LISA_to_SSB(tL, lam, beta, psi, t0=t0)
-            # inc doesn't change frame
+            inc = self.xp.array(predefined_params[:, 4])
+            lam = self.xp.array(predefined_params[:, 5])
+            beta = self.xp.array(predefined_params[:, 6])
+            psi = self.xp.array(predefined_params[:, 7])
+            phi_ref = self.xp.array(predefined_params[:, 8])
+            chi1 = self.xp.array(predefined_params[:, 9])
+            chi2 = self.xp.array(predefined_params[:, 10])
             
             if m1[0] == 0:
                 print(f"[ERROR] m1 is 0.0. Could not find the mass!")
@@ -441,9 +287,6 @@ class DatasetGenerator:
             phi_ref = self.xp.random.uniform(0, 2*np.pi, batch_size)
             chi1 = self.xp.zeros(batch_size)
             chi2 = self.xp.zeros(batch_size)
-            
-            # [FIX 1] Convert LISA -> SSB for randomly sampled parameters too
-            t_ref_ssb, lam_ssb, beta_ssb, psi_ssb = LISA_to_SSB(t_ref, lam, beta, psi, t0=0.0)
 
         f_ref = self.xp.zeros(batch_size) 
         modes =[(2,2), (2,1), (3,3), (3,2), (4,4), (4,3)]
@@ -451,13 +294,12 @@ class DatasetGenerator:
         freqs_in = cp.asarray(self.freqs_gen) if self.use_gpu else self.freqs_gen
         t_obs_end_yrs = float(self.T_gen) / YRSID_SI
 
-        # [FIX 2] Pass the `_ssb` variables to wave_gen instead of the original ones
         wave_out = wave_gen(
             m1, m2, chi1, chi2, dist,
-            phi_ref, f_ref, inc, lam_ssb, beta_ssb, psi_ssb, t_ref_ssb, 
+            phi_ref, f_ref, inc, lam, beta, psi, t_ref,
             freqs=freqs_in, modes=modes, direct=False, fill=True, 
             squeeze=False, length=self.N_gen,
-            t_obs_start=0.0, t_obs_end=5.0       ###!!! CHECK THIS !!        
+            t_obs_start=0.0, t_obs_end=1.0       ###!!! CHECK THIS !! t_obs_end should be t_ref + time i want to look at after merger/ year. T start should be the fraction of the year from which i want to start??        
         )
         
         wave_fd_A = wave_out[:, 0, :] 
@@ -466,27 +308,11 @@ class DatasetGenerator:
         if self.use_gpu:
             wave_td_A = cp.fft.irfft(wave_fd_A, n=self.N_gen, axis=-1)[:, -self.N_obs:]
             wave_td_E = cp.fft.irfft(wave_fd_E, n=self.N_gen, axis=-1)[:, -self.N_obs:]
-            # [NOTE] Notice how we are still saving the ORIGINAL `lam`, `beta`, `psi`, `t_ref` as the labels
-            # params = cp.asnumpy(cp.stack([m1, q, dist, t_ref, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1))
-            params = cp.asnumpy(cp.stack([
-                                m1, q, dist,
-                                tL,
-                                inc, lam, beta, psi,
-                                phi_ref, chi1, chi2
-                            ], axis=1))
-
-            
+            params = cp.asnumpy(cp.stack([m1, q, dist, t_ref, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1))
         else:
             wave_td_A = np.fft.irfft(wave_fd_A, n=self.N_gen, axis=-1)[:, -self.N_obs:]
             wave_td_E = np.fft.irfft(wave_fd_E, n=self.N_gen, axis=-1)[:, -self.N_obs:]
-            # [NOTE] Notice how we are still saving the ORIGINAL `lam`, `beta`, `psi`, `t_ref` as the labels
-            # params = np.stack([m1, q, dist, t_ref, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1)
-            params = np.stack([
-                                    m1, q, dist,
-                                    tL,
-                                    inc, lam, beta, psi,
-                                    phi_ref, chi1, chi2
-                                ], axis=1)
+            params = np.stack([m1, q, dist, t_ref, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1)
             
         return wave_td_A, wave_td_E, params
 
