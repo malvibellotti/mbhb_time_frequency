@@ -120,43 +120,118 @@ from scipy.stats import gaussian_kde
 #     return[m1, q_final, dist, Deltat, t0, inc, lam, beta, psi, phi_ref, chi1, chi2]
 
 
+# def generate_astrophysical_prior(catalog_params, num_samples):
+#     print(f"-> fit kde to {len(catalog_params)} of alberto's events...")
+    
+#     log_m1   = np.log10(catalog_params[:, 0])
+#     q        = catalog_params[:, 1]
+#     log_dist = np.log10(catalog_params[:, 2])
+#     t0       = catalog_params[:, 4]
+#     inc      = catalog_params[:, 5]
+#     lam      = catalog_params[:, 6]
+#     beta     = catalog_params[:, 7]
+#     psi      = catalog_params[:, 8]
+#     phi_ref  = catalog_params[:, 9]
+    
+#     training_data = np.vstack([log_m1, q, log_dist, t0, inc, lam, beta, psi, phi_ref])
+#     kde = gaussian_kde(training_data)
+    
+#     print(f"-> then i sample {num_samples} new events from the kde estimation of the prior...")
+#     samples = kde.resample(num_samples)
+    
+#     new_params = np.zeros((num_samples, 12)) 
+    
+#     new_params[:, 0] = 10**np.clip(samples[0, :], np.min(log_m1), np.max(log_m1)) 
+#     new_params[:, 1] = np.clip(samples[1, :], 0.01, 1.0)                      
+#     new_params[:, 2] = 10**np.clip(samples[2, :], np.min(log_dist), np.max(log_dist)) 
+    
+#     new_params[:, 3] = np.random.uniform(-10000.0, 10000.0, num_samples)
+    
+    
+#     new_params[:, 4] = np.clip(samples[3, :], np.min(t0), np.max(t0)) 
+    
+#     new_params[:, 5] = np.clip(samples[4, :], 0.0, np.pi)           # inc
+#     new_params[:, 6] = samples[5, :] % (2 * np.pi)                  # lam
+#     new_params[:, 7] = np.clip(samples[6, :], -np.pi/2, np.pi/2)    # beta (latitude)
+#     new_params[:, 8] = samples[7, :] % (2 * np.pi)                  # psi 
+#     new_params[:, 9] = samples[8, :] % (2 * np.pi)                  # phi_ref
+    
+#     new_params[:, 10] = 0.0
+#     new_params[:, 11] = 0.0 
+    
+#     return new_params
+
+
 def generate_astrophysical_prior(catalog_params, num_samples):
     print(f"-> fit kde to {len(catalog_params)} of alberto's events...")
     
-    log_m1 = np.log10(catalog_params[:, 0])
-    q = catalog_params[:, 1]
+    # 1. Extract params (keeping spins out of the KDE for Phase 1)
+    log_m1   = np.log10(catalog_params[:, 0])
+    q        = catalog_params[:, 1]
     log_dist = np.log10(catalog_params[:, 2])
-    inc = catalog_params[:, 5]  # <--- MUST BE 5 NOW! 4 is t0.
+    t0       = catalog_params[:, 4]
+    inc      = catalog_params[:, 5]
+    lam      = catalog_params[:, 6]
+    beta     = catalog_params[:, 7]
+    psi      = catalog_params[:, 8]
+    phi_ref  = catalog_params[:, 9]
     
-    training_data = np.vstack([log_m1, q, log_dist, inc])
-    kde = gaussian_kde(training_data)
+    training_data = np.vstack([log_m1, q, log_dist, t0, inc, lam, beta, psi, phi_ref])
+    
+    # Add tiny jitter to avoid Singular Matrix errors in KDE
+    jitter = np.random.normal(0, 1e-6, training_data.shape)
+    kde = gaussian_kde(training_data + jitter)
     
     print(f"-> then i sample {num_samples} new events from the kde estimation of the prior...")
     samples = kde.resample(num_samples)
     
-    samples[0, :] = np.clip(samples[0, :], np.min(log_m1), np.max(log_m1)) 
-    samples[1, :] = np.clip(samples[1, :], 0.01, 1.0)                      
-    samples[2, :] = np.clip(samples[2, :], np.min(log_dist), np.max(log_dist)) 
-    samples[3, :] = np.clip(samples[3, :], 0.0, np.pi)
+    new_params = np.zeros((num_samples, 12)) 
     
-    new_params = np.zeros((num_samples, 12))  # <--- MUST BE 12
+    # log_m1
+    new_params[:, 0] = 10**samples[0, :]
     
-    new_params[:, 0] = 10**samples[0, :] 
-    new_params[:, 1] = samples[1, :]     
-    new_params[:, 2] = 10**samples[2, :] 
+    # q (reflect at 1.0 and 0.01)
+    q_raw = samples[1, :]
+    q_raw = np.where(q_raw > 1.0, 2.0 - q_raw, q_raw)
+    new_params[:, 1] = np.where(q_raw < 0.01, 0.02 - q_raw, q_raw)
     
-    # Give random KDE samples a t_ref and default t0 to 0.0
-    new_params[:, 3] = (30*24*3600) - (7.5*24*3600) * np.random.uniform(0.1, 0.5, num_samples)
-    new_params[:, 4] = 0.0 
+    # dist
+    new_params[:, 2] = 10**samples[2, :]
     
-    new_params[:, 5] = samples[3, :]     
-    new_params[:, 6] = np.random.uniform(0, 2*np.pi, num_samples)
-    new_params[:, 7] = np.arcsin(np.random.uniform(-1, 1, num_samples)) 
-    new_params[:, 8] = np.random.uniform(0, np.pi, num_samples)
-    new_params[:, 9] = np.random.uniform(0, 2*np.pi, num_samples)
+    # Deltat: ML uniform prior to shift the merger randomly in the 7.5 day window!
+    new_params[:, 3] = np.random.uniform(-10000.0, 10000.0, num_samples)
     
+    # t0
+    new_params[:, 4] = samples[3, :]
+    
+    t0_raw = samples[3, :]
+    t0_raw = np.where(t0_raw < 0.1, 0.2 - t0_raw, t0_raw)  # Bounce off 0.1 (prevents zero-crossing crash)
+    new_params[:, 4] = np.where(t0_raw > 4.9, 9.8 - t0_raw, t0_raw) # Bounce off 4.9
+
+    # inc (reflect at 0 and pi)
+    inc_raw = samples[4, :]
+    inc_raw = np.where(inc_raw < 0.0, -inc_raw, inc_raw) 
+    new_params[:, 5] = np.where(inc_raw > np.pi, 2*np.pi - inc_raw, inc_raw)
+    
+    # Helper function to wrap angles exactly to [-pi, pi]
+    def wrap_to_pi(angles):
+        return (angles + np.pi) % (2 * np.pi) - np.pi
+        
+    # lam (wrap to [-pi, pi])
+    new_params[:, 6] = wrap_to_pi(samples[5, :])
+    
+    # beta (reflect at -pi/2 and pi/2)
+    beta_raw = samples[6, :]
+    beta_raw = np.where(beta_raw > np.pi/2, np.pi - beta_raw, beta_raw)
+    new_params[:, 7] = np.where(beta_raw < -np.pi/2, -np.pi - beta_raw, beta_raw)
+    
+    new_params[:, 8] = samples[7, :] % np.pi  #! psi needs to be in [0, pi]
+    new_params[:, 9] = wrap_to_pi(samples[8, :])
+    
+    # Spins (Fixed to 0 for debugging 9D ML setup)
     new_params[:, 10] = 0.0
     new_params[:, 11] = 0.0 
+    
     return new_params
 
 def extract_alberto_json(filepath):
@@ -168,9 +243,6 @@ def extract_alberto_json(filepath):
 
     Deltat = float(p['Deltat'])
     t0 = float(w['t0'])
-    
-    # Absolute physical time in LISA frame
-    t_ref = t0 * YRSID_SI + Deltat
 
     mc = float(p['Mchirp'])
     q_json = float(p['q'])
@@ -191,9 +263,8 @@ def extract_alberto_json(filepath):
     phi_ref = float(p['phi'])
     chi1 = float(p['chi1'])
     chi2 = float(p['chi2'])
-    
-    # Return 12 items! t0 is kept purely for the SSB transformation later
-    return [m1, q_final, dist, t_ref, t0, inc, lam, beta, psi, phi_ref, chi1, chi2]
+   
+    return [m1, q_final, dist, Deltat, t0, inc, lam, beta, psi, phi_ref, chi1, chi2]
 
 # def load_alberto_population(repo_path, pop_name="Pop3", filter_modes=0):
 #     h5_path = os.path.join(repo_path, "data_for_Malvina.h5")
@@ -399,32 +470,94 @@ class DatasetGenerator:
     #     return wave_td_A, wave_td_E, params
 
 
+    # def get_mbhb_batch(self, wave_gen, batch_size, predefined_params=None):
+    #     if predefined_params is not None:
+    #         m1 = self.xp.array(predefined_params[:, 0])
+    #         q = self.xp.array(predefined_params[:, 1])
+    #         m2 = m1 * q
+    #         dist = self.xp.array(predefined_params[:, 2])
+            
+    #         t_ref  = self.xp.array(predefined_params[:, 3])
+    #         t0     = self.xp.array(predefined_params[:, 4])
+    #         inc    = self.xp.array(predefined_params[:, 5])
+    #         lam    = self.xp.array(predefined_params[:, 6])
+    #         beta   = self.xp.array(predefined_params[:, 7])
+    #         psi    = self.xp.array(predefined_params[:, 8])
+    #         phi_ref= self.xp.array(predefined_params[:, 9])
+    #         chi1   = self.xp.array(predefined_params[:, 10])
+    #         chi2   = self.xp.array(predefined_params[:, 11])
+
+    #         # Convert LISA -> SSB
+    #         t_ref_ssb, lam_ssb, beta_ssb, psi_ssb = LISA_to_SSB(t_ref, lam, beta, psi, t0=t0)
+            
+    #         if m1[0] == 0:
+    #             print(f"[ERROR] m1 is 0.0. Could not find the mass!")
+    #     else:
+    #         m1 = 10**self.xp.random.uniform(5, 6, batch_size)
+    #         q = self.xp.random.uniform(0.1, 1, batch_size)
+    #         m2 = m1 * q
+    #         dist = self.xp.random.uniform(self.dist_min, self.dist_max, batch_size)
+    #         t_ref = self.xp.full(batch_size, self.T_gen) - self.T_obs * self.xp.random.uniform(0.1, 0.5, batch_size)
+    #         inc = self.xp.arccos(self.xp.random.uniform(-1, 1, batch_size))
+    #         lam = self.xp.random.uniform(0, 2*np.pi, batch_size)
+    #         beta = self.xp.arcsin(self.xp.random.uniform(-1, 1, batch_size))
+    #         psi = self.xp.random.uniform(0, np.pi, batch_size)
+    #         phi_ref = self.xp.random.uniform(0, 2*np.pi, batch_size)
+    #         chi1 = self.xp.zeros(batch_size)
+    #         chi2 = self.xp.zeros(batch_size)
+            
+    #         t_ref_ssb, lam_ssb, beta_ssb, psi_ssb = LISA_to_SSB(t_ref, lam, beta, psi, t0=0.0)
+
+    #     f_ref = self.xp.zeros(batch_size) 
+    #     modes = [(2,2), (2,1), (3,3), (3,2), (4,4), (4,3)]
+        
+    #     freqs_in = cp.asarray(self.freqs_gen) if self.use_gpu else self.freqs_gen
+
+    #     wave_out = wave_gen(
+    #         m1, m2, chi1, chi2, dist,
+    #         phi_ref, f_ref, inc, lam_ssb, beta_ssb, psi_ssb, t_ref_ssb, 
+    #         freqs=freqs_in, modes=modes, direct=False, fill=True, 
+    #         squeeze=False, length=self.N_gen,
+    #         t_obs_start=0.0, t_obs_end=5.0 
+    #     )
+        
+    #     wave_fd_A = wave_out[:, 0, :] 
+    #     wave_fd_E = wave_out[:, 1, :]
+        
+    #     # NOTE: We drop t0 here and output exactly 11 parameters (matches the HDF5 structure)
+    #     if self.use_gpu:
+    #         wave_td_A = cp.fft.irfft(wave_fd_A, n=self.N_gen, axis=-1)[:, -self.N_obs:]
+    #         wave_td_E = cp.fft.irfft(wave_fd_E, n=self.N_gen, axis=-1)[:, -self.N_obs:]
+    #         params = cp.asnumpy(cp.stack([m1, q, dist, t_ref, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1))
+    #     else:
+    #         wave_td_A = np.fft.irfft(wave_fd_A, n=self.N_gen, axis=-1)[:, -self.N_obs:]
+    #         wave_td_E = np.fft.irfft(wave_fd_E, n=self.N_gen, axis=-1)[:, -self.N_obs:]
+    #         params = np.stack([m1, q, dist, t_ref, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1)
+            
+    #     return wave_td_A, wave_td_E, params
+
+
     def get_mbhb_batch(self, wave_gen, batch_size, predefined_params=None):
+
         if predefined_params is not None:
             m1 = self.xp.array(predefined_params[:, 0])
-            q = self.xp.array(predefined_params[:, 1])
+            q  = self.xp.array(predefined_params[:, 1])
             m2 = m1 * q
             dist = self.xp.array(predefined_params[:, 2])
             
-            # I had to overwrite Alberto's t_ref because it was out of ,my wiindow of 30 days!!!!!!
-            # t_ref = self.xp.full(batch_size, self.T_gen) - self.T_obs * self.xp.random.uniform(0.1, 0.5, batch_size)
-            # t_ref = self.xp.array(predefined_params[:, 3])
-            Deltat = predefined_params[:,3]
-            t0     = predefined_params[:,4]
+            Deltat = self.xp.array(predefined_params[:, 3]) #  Deltat
+            t0     = self.xp.array(predefined_params[:, 4]) #  t0
+            inc    = self.xp.array(predefined_params[:, 5])
+            lam    = self.xp.array(predefined_params[:, 6]) # LISA-frame
+            beta   = self.xp.array(predefined_params[:, 7]) # LISA-frame
+            psi    = self.xp.array(predefined_params[:, 8]) # LISA-frame
+            phi_ref= self.xp.array(predefined_params[:, 9])
+            chi1   = self.xp.array(predefined_params[:, 10])
+            chi2   = self.xp.array(predefined_params[:, 11])
 
-            inc = self.xp.array(predefined_params[:, 5])
-            lam = self.xp.array(predefined_params[:, 6])
-            beta = self.xp.array(predefined_params[:, 7])
-            psi = self.xp.array(predefined_params[:, 8])
-            phi_ref = self.xp.array(predefined_params[:, 9])
-            chi1 = self.xp.array(predefined_params[:, 10])
-            chi2 = self.xp.array(predefined_params[:, 11])
-
-            tL = t0 * YRSID_SI + Deltat
+            t_ref_lisa = (t0 * YRSID_SI) + Deltat
             
-            # convert LISA -> SSB before passing to BBHx
-            t_ref_ssb, lam_ssb, beta_ssb, psi_ssb = LISA_to_SSB(tL, lam, beta, psi, t0=t0)
-            # inc doesn't change frame
+            t_ref_ssb, lam_ssb, beta_ssb, psi_ssb = LISA_to_SSB(t_ref_lisa, lam, beta, psi, t0=t0)
             
             if m1[0] == 0:
                 print(f"[ERROR] m1 is 0.0. Could not find the mass!")
@@ -433,7 +566,10 @@ class DatasetGenerator:
             q = self.xp.random.uniform(0.1, 1, batch_size)
             m2 = m1 * q
             dist = self.xp.random.uniform(self.dist_min, self.dist_max, batch_size)
-            t_ref = self.xp.full(batch_size, self.T_gen) - self.T_obs * self.xp.random.uniform(0.1, 0.5, batch_size)
+            
+            Deltat = self.xp.random.uniform(-86400, 86400, batch_size)
+            t0 = self.xp.random.uniform(0.0, 1.0, batch_size)
+            
             inc = self.xp.arccos(self.xp.random.uniform(-1, 1, batch_size))
             lam = self.xp.random.uniform(0, 2*np.pi, batch_size)
             beta = self.xp.arcsin(self.xp.random.uniform(-1, 1, batch_size))
@@ -442,51 +578,42 @@ class DatasetGenerator:
             chi1 = self.xp.zeros(batch_size)
             chi2 = self.xp.zeros(batch_size)
             
-            # [FIX 1] Convert LISA -> SSB for randomly sampled parameters too
-            t_ref_ssb, lam_ssb, beta_ssb, psi_ssb = LISA_to_SSB(t_ref, lam, beta, psi, t0=0.0)
+            t_ref_lisa = (t0 * YRSID_SI) + Deltat
+            t_ref_ssb, lam_ssb, beta_ssb, psi_ssb = LISA_to_SSB(t_ref_lisa, lam, beta, psi, t0=t0)
 
         f_ref = self.xp.zeros(batch_size) 
-        modes =[(2,2), (2,1), (3,3), (3,2), (4,4), (4,3)]
-        
+        modes = [(2,2), (2,1), (3,3), (3,2), (4,4), (4,3)]
         freqs_in = cp.asarray(self.freqs_gen) if self.use_gpu else self.freqs_gen
-        t_obs_end_yrs = float(self.T_gen) / YRSID_SI
 
-        # [FIX 2] Pass the `_ssb` variables to wave_gen instead of the original ones
+        # 3. GENERATE (Using the SSB parameters for proper physics)
         wave_out = wave_gen(
             m1, m2, chi1, chi2, dist,
             phi_ref, f_ref, inc, lam_ssb, beta_ssb, psi_ssb, t_ref_ssb, 
             freqs=freqs_in, modes=modes, direct=False, fill=True, 
             squeeze=False, length=self.N_gen,
-            t_obs_start=0.0, t_obs_end=5.0       ###!!! CHECK THIS !!        
+            t_obs_start=0.0, t_obs_end=5.0 
         )
         
         wave_fd_A = wave_out[:, 0, :] 
         wave_fd_E = wave_out[:, 1, :]
         
+        # 4. PHASE SHIFT (Targeting Day 28.25 + Deltat)
+        target_time_sec = (28.25 * 24.0 * 3600.0) + Deltat
+        shift_time = target_time_sec - t_ref_ssb
+        
+        phase_shift = self.xp.exp(-1j * 2.0 * np.pi * freqs_in * shift_time[:, None])
+        wave_fd_A *= phase_shift
+        wave_fd_E *= phase_shift
+        
+        # 5. iFFT AND SLICE (Output exactly 11 parameters! Deltat replaces t_ref, L-frame angles retained!)
         if self.use_gpu:
             wave_td_A = cp.fft.irfft(wave_fd_A, n=self.N_gen, axis=-1)[:, -self.N_obs:]
             wave_td_E = cp.fft.irfft(wave_fd_E, n=self.N_gen, axis=-1)[:, -self.N_obs:]
-            # [NOTE] Notice how we are still saving the ORIGINAL `lam`, `beta`, `psi`, `t_ref` as the labels
-            # params = cp.asnumpy(cp.stack([m1, q, dist, t_ref, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1))
-            params = cp.asnumpy(cp.stack([
-                                m1, q, dist,
-                                tL,
-                                inc, lam, beta, psi,
-                                phi_ref, chi1, chi2
-                            ], axis=1))
-
-            
+            params = cp.asnumpy(cp.stack([m1, q, dist, Deltat, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1))
         else:
             wave_td_A = np.fft.irfft(wave_fd_A, n=self.N_gen, axis=-1)[:, -self.N_obs:]
             wave_td_E = np.fft.irfft(wave_fd_E, n=self.N_gen, axis=-1)[:, -self.N_obs:]
-            # [NOTE] Notice how we are still saving the ORIGINAL `lam`, `beta`, `psi`, `t_ref` as the labels
-            # params = np.stack([m1, q, dist, t_ref, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1)
-            params = np.stack([
-                                    m1, q, dist,
-                                    tL,
-                                    inc, lam, beta, psi,
-                                    phi_ref, chi1, chi2
-                                ], axis=1)
+            params = np.stack([m1, q, dist, Deltat, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1)
             
         return wave_td_A, wave_td_E, params
 
@@ -509,6 +636,96 @@ class DatasetGenerator:
         noise_A = gen_psd_noise(self.sigma_fd_A, self.psd_A)
         noise_E = gen_psd_noise(self.sigma_fd_E, self.psd_E)
         return noise_A, noise_E
+
+
+
+    # NOT SURE THIS IS THE RIGHT WAY TO PASS TREF... 
+
+    
+    # def get_mbhb_batch(self, wave_gen, batch_size, predefined_params=None):
+    #     if predefined_params is not None:
+    #         m1 = self.xp.array(predefined_params[:, 0])
+    #         q = self.xp.array(predefined_params[:, 1])
+    #         m2 = m1 * q
+    #         dist = self.xp.array(predefined_params[:, 2])
+            
+    #         t_ref_lisa = self.xp.array(predefined_params[:, 3]) # This is t0 * YRSID + Deltat
+    #         t0         = self.xp.array(predefined_params[:, 4])
+    #         inc        = self.xp.array(predefined_params[:, 5])
+    #         lam        = self.xp.array(predefined_params[:, 6])
+    #         beta       = self.xp.array(predefined_params[:, 7])
+    #         psi        = self.xp.array(predefined_params[:, 8])
+    #         phi_ref    = self.xp.array(predefined_params[:, 9])
+    #         chi1       = self.xp.array(predefined_params[:, 10])
+    #         chi2       = self.xp.array(predefined_params[:, 11])
+
+    #         # Convert LISA -> SSB (Required by bbhx)
+    #         t_ref_ssb, lam_ssb, beta_ssb, psi_ssb = LISA_to_SSB(t_ref_lisa, lam, beta, psi, t0=t0)
+            
+    #         if m1[0] == 0:
+    #             print(f"[ERROR] m1 is 0.0. Could not find the mass!")
+    #     else:
+    #         m1 = 10**self.xp.random.uniform(5, 6, batch_size)
+    #         q = self.xp.random.uniform(0.1, 1, batch_size)
+    #         m2 = m1 * q
+    #         dist = self.xp.random.uniform(self.dist_min, self.dist_max, batch_size)
+            
+    #         # Randomize the orbital position (e.g. anywhere in a 1-year mission)
+    #         t0 = self.xp.random.uniform(0.0, 1.0, batch_size)
+    #         t_ref_lisa = t0 * YRSID_SI
+            
+    #         inc = self.xp.arccos(self.xp.random.uniform(-1, 1, batch_size))
+    #         lam = self.xp.random.uniform(0, 2*np.pi, batch_size)
+    #         beta = self.xp.arcsin(self.xp.random.uniform(-1, 1, batch_size))
+    #         psi = self.xp.random.uniform(0, np.pi, batch_size)
+    #         phi_ref = self.xp.random.uniform(0, 2*np.pi, batch_size)
+    #         chi1 = self.xp.zeros(batch_size)
+    #         chi2 = self.xp.zeros(batch_size)
+            
+    #         # Convert random L-frame to SSB
+    #         t_ref_ssb, lam_ssb, beta_ssb, psi_ssb = LISA_to_SSB(t_ref_lisa, lam, beta, psi, t0=t0)
+
+    #     f_ref = self.xp.zeros(batch_size) 
+    #     modes = [(2,2), (2,1), (3,3), (3,2), (4,4), (4,3)]
+        
+    #     freqs_in = cp.asarray(self.freqs_gen) if self.use_gpu else self.freqs_gen
+
+    #     # 1. Generate the waveform. BBHX uses t_ref_ssb to calculate the correct orbit!
+    #     wave_out = wave_gen(
+    #         m1, m2, chi1, chi2, dist,
+    #         phi_ref, f_ref, inc, lam_ssb, beta_ssb, psi_ssb, t_ref_ssb, 
+    #         freqs=freqs_in, modes=modes, direct=False, fill=True, 
+    #         squeeze=False, length=self.N_gen,
+    #         t_obs_start=0.0, t_obs_end=1.0 
+    #     )
+        
+    #     wave_fd_A = wave_out[:, 0, :] 
+    #     wave_fd_E = wave_out[:, 1, :]
+        
+    #     # 2. THE SUPERVISOR'S PHASE SHIFT
+    #     # We want to slide the merger from `t_ref_ssb` to Day 26.25 in our 30-day array.
+    #     target_time_sec = 26.25 * 24.0 * 3600.0
+    #     shift_time = target_time_sec - t_ref_ssb  # How far we need to slide it
+        
+    #     # Multiply by exp(-i * 2pi * f * dt). 
+    #     # (shift_time[:, None] allows broadcasting over the frequency array)
+    #     phase_shift = self.xp.exp(-1j * 2.0 * np.pi * freqs_in * shift_time[:, None])
+        
+    #     wave_fd_A *= phase_shift
+    #     wave_fd_E *= phase_shift
+
+    #     # 3. iFFT and Slice!
+    #     if self.use_gpu:
+    #         wave_td_A = cp.fft.irfft(wave_fd_A, n=self.N_gen, axis=-1)[:, -self.N_obs:]
+    #         wave_td_E = cp.fft.irfft(wave_fd_E, n=self.N_gen, axis=-1)[:, -self.N_obs:]
+    #         # Save the L-frame parameters so the ML model predicts exactly what Alberto's MCMC predicts!
+    #         params = cp.asnumpy(cp.stack([m1, q, dist, t_ref_lisa, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1))
+    #     else:
+    #         wave_td_A = np.fft.irfft(wave_fd_A, n=self.N_gen, axis=-1)[:, -self.N_obs:]
+    #         wave_td_E = np.fft.irfft(wave_fd_E, n=self.N_gen, axis=-1)[:, -self.N_obs:]
+    #         params = np.stack([m1, q, dist, t_ref_lisa, inc, lam, beta, psi, phi_ref, chi1, chi2], axis=1)
+            
+    #     return wave_td_A, wave_td_E, params
 
     def generate(self, n_samples, wave_gen, output_path, batch_size, 
                  repr_type='stft', channels='XYZ', nperseg=1024, noverlap=768, 
@@ -601,7 +818,7 @@ class DatasetGenerator:
             scat_dummy = scat(dummy)
             n_freq = len(self.s_indices)
             n_time = scat_dummy.shape[-1]
-            
+            å
         elif repr_type == 'superlets':
             freqs_short = np.fft.rfftfreq(self.N_obs, self.dt)
             self.freqs_clean = freqs_short[(freqs_short >= 1e-4) & (freqs_short <= 5e-2)]
@@ -616,7 +833,8 @@ class DatasetGenerator:
         
         print(f"[INFO] Initialized Output Grid -> (Channels: {n_ch_out}, Freq: {n_freq}, Time: {n_time})")
 
-        with h5py.File(output_path, 'w') as f:
+        with h5py.File(output_path, 'w', libver='latest') as f:
+
             f.attrs['dt'] = self.dt
             f.attrs['T_obs'] = self.T_obs
             f.attrs['repr_type'] = repr_type
@@ -1073,28 +1291,62 @@ def main():
 
 
 
+    # if args.fixed_intrinsic:
+    #     print(f"\n--- Generating FIXED INTRINSIC, RANDOM EXTRINSIC Dataset ({args.N} events) ---")
+    #     predefined_pop = np.zeros((args.N, 11))
+        
+    #     # FIXED: M1 = 1e6, M2 = 5e5, Dist = 10 Gpc, T_ref = Middle of 7.5 day window
+    #     predefined_pop[:, 0] = 5e5 
+    #     predefined_pop[:, 1] = 0.8   
+    #     predefined_pop[:, 2] = 15000 * 1e6 * PC_SI
+        
+    #     predefined_pop[:, 3] = (30 * 24 * 3600) - (7.5 * 24 * 3600 * 0.1) 
+        
+    #     # RANDOM: Sky Location, Inclination, Polarization, Phase
+    #     predefined_pop[:, 4] = np.arccos(np.random.uniform(-1, 1, args.N)) # inc
+    #     predefined_pop[:, 5] = np.random.uniform(0, 2*np.pi, args.N)       # lam
+    #     predefined_pop[:, 6] = np.arcsin(np.random.uniform(-1, 1, args.N)) # beta
+    #     predefined_pop[:, 7] = np.random.uniform(0, np.pi, args.N)         # psi
+    #     predefined_pop[:, 8] = np.random.uniform(0, 2*np.pi, args.N)       # phi_ref
+        
+    #     predefined_pop[:, 9] = 0.0 # chi1
+    #     predefined_pop[:, 10] = 0.0 # chi2
+        
+    #     predefined_modes = np.zeros(args.N, dtype=int)
+
+    # if args.fixed_intrinsic:
+    #     print(f"\n--- Generating FIXED INTRINSIC, RANDOM EXTRINSIC Dataset ({args.N} events) ---")
+    #     predefined_pop = np.zeros((args.N, 12))  # MUST BE 12
+        
+    #     predefined_pop[:, 0] = 5e5 
+    #     predefined_pop[:, 1] = 0.8   
+    #     predefined_pop[:, 2] = 15000 * 1e6 * PC_SI
+    #     predefined_pop[:, 3] = (30 * 24 * 3600) - (7.5 * 24 * 3600 * 0.1)  # t_ref
+    #     predefined_pop[:, 4] = 0.0 # t0
+    #     predefined_pop[:, 5] = np.arccos(np.random.uniform(-1, 1, args.N)) # inc
+    #     predefined_pop[:, 6] = np.random.uniform(0, 2*np.pi, args.N)       # lam
+    #     predefined_pop[:, 7] = np.arcsin(np.random.uniform(-1, 1, args.N)) # beta
+    #     predefined_pop[:, 8] = np.random.uniform(0, np.pi, args.N)         # psi
+    #     predefined_pop[:, 9] = np.random.uniform(0, 2*np.pi, args.N)       # phi_ref
+    #     predefined_pop[:, 10] = 0.0 # chi1
+    #     predefined_pop[:, 11] = 0.0 # chi2
+
     if args.fixed_intrinsic:
         print(f"\n--- Generating FIXED INTRINSIC, RANDOM EXTRINSIC Dataset ({args.N} events) ---")
-        predefined_pop = np.zeros((args.N, 11))
+        predefined_pop = np.zeros((args.N, 12))  # MUST BE 12
         
-        # FIXED: M1 = 1e6, M2 = 5e5, Dist = 10 Gpc, T_ref = Middle of 7.5 day window
         predefined_pop[:, 0] = 5e5 
         predefined_pop[:, 1] = 0.8   
         predefined_pop[:, 2] = 15000 * 1e6 * PC_SI
-        
-        predefined_pop[:, 3] = (30 * 24 * 3600) - (7.5 * 24 * 3600 * 0.1) 
-        
-        # RANDOM: Sky Location, Inclination, Polarization, Phase
-        predefined_pop[:, 4] = np.arccos(np.random.uniform(-1, 1, args.N)) # inc
-        predefined_pop[:, 5] = np.random.uniform(0, 2*np.pi, args.N)       # lam
-        predefined_pop[:, 6] = np.arcsin(np.random.uniform(-1, 1, args.N)) # beta
-        predefined_pop[:, 7] = np.random.uniform(0, np.pi, args.N)         # psi
-        predefined_pop[:, 8] = np.random.uniform(0, 2*np.pi, args.N)       # phi_ref
-        
-        predefined_pop[:, 9] = 0.0 # chi1
-        predefined_pop[:, 10] = 0.0 # chi2
-        
-        predefined_modes = np.zeros(args.N, dtype=int)
+        predefined_pop[:, 3] = np.random.uniform(-10000, 10000, args.N)  # Deltat
+        predefined_pop[:, 4] = 0.5 # t0
+        predefined_pop[:, 5] = np.arccos(np.random.uniform(-1, 1, args.N)) # inc
+        predefined_pop[:, 6] = np.random.uniform(0, 2*np.pi, args.N)       # lam
+        predefined_pop[:, 7] = np.arcsin(np.random.uniform(-1, 1, args.N)) # beta
+        predefined_pop[:, 8] = np.random.uniform(0, np.pi, args.N)         # psi
+        predefined_pop[:, 9] = np.random.uniform(0, 2*np.pi, args.N)       # phi_ref
+        predefined_pop[:, 10] = 0.0 # chi1
+        predefined_pop[:, 11] = 0.0 # chi2
 
 
     elif args.alberto_repo != "":
@@ -1138,7 +1390,7 @@ def main():
                  n_freq_qtam=args.n_freq_qtam, n_time_qtam=args.n_time_qtam,
                  predefined_population=predefined_pop, predefined_modes=predefined_modes)
 
-    if args.N < 10 :
+    if args.N <= 10 :
         plot_generated_sample(args.out, out_img=f"plot_{args.repr_type}_{args.output_format}.png")
     # plot_generated_sample(args.out, out_img=f"plot_{args.repr_type}_{args.output_format}.png")
 
