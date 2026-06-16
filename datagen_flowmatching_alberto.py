@@ -165,7 +165,6 @@ from scipy.stats import gaussian_kde
 def generate_astrophysical_prior(catalog_params, num_samples):
     print(f"-> fit kde to {len(catalog_params)} of alberto's events...")
     
-    # 1. Extract params (keeping spins out of the KDE for Phase 1)
     log_m1   = np.log10(catalog_params[:, 0])
     q        = catalog_params[:, 1]
     log_dist = np.log10(catalog_params[:, 2])
@@ -178,7 +177,6 @@ def generate_astrophysical_prior(catalog_params, num_samples):
     
     training_data = np.vstack([log_m1, q, log_dist, t0, inc, lam, beta, psi, phi_ref])
     
-    # Add tiny jitter to avoid Singular Matrix errors in KDE
     jitter = np.random.normal(0, 1e-6, training_data.shape)
     kde = gaussian_kde(training_data + jitter)
     
@@ -187,40 +185,35 @@ def generate_astrophysical_prior(catalog_params, num_samples):
     
     new_params = np.zeros((num_samples, 12)) 
     
-    # log_m1
     new_params[:, 0] = 10**samples[0, :]
     
-    # q (reflect at 1.0 and 0.01)
     q_raw = samples[1, :]
     q_raw = np.where(q_raw > 1.0, 2.0 - q_raw, q_raw)
     new_params[:, 1] = np.where(q_raw < 0.01, 0.02 - q_raw, q_raw)
     
-    # dist
     new_params[:, 2] = 10**samples[2, :]
     
-    # Deltat: ML uniform prior to shift the merger randomly in the 7.5 day window!
     new_params[:, 3] = np.random.uniform(-10000.0, 10000.0, num_samples)
     
-    # t0
     new_params[:, 4] = samples[3, :]
     
     t0_raw = samples[3, :]
-    t0_raw = np.where(t0_raw < 0.1, 0.2 - t0_raw, t0_raw)  # Bounce off 0.1 (prevents zero-crossing crash)
-    new_params[:, 4] = np.where(t0_raw > 4.9, 9.8 - t0_raw, t0_raw) # Bounce off 4.9
+    t0_raw = np.where(t0_raw < 0.1, 0.2 - t0_raw, t0_raw) 
+    new_params[:, 4] = np.where(t0_raw > 4.9, 9.8 - t0_raw, t0_raw) 
 
-    # inc (reflect at 0 and pi)
+    
     inc_raw = samples[4, :]
     inc_raw = np.where(inc_raw < 0.0, -inc_raw, inc_raw) 
     new_params[:, 5] = np.where(inc_raw > np.pi, 2*np.pi - inc_raw, inc_raw)
     
-    # Helper function to wrap angles exactly to [-pi, pi]
+    
     def wrap_to_pi(angles):
         return (angles + np.pi) % (2 * np.pi) - np.pi
         
-    # lam (wrap to [-pi, pi])
+    
     new_params[:, 6] = wrap_to_pi(samples[5, :])
     
-    # beta (reflect at -pi/2 and pi/2)
+   
     beta_raw = samples[6, :]
     beta_raw = np.where(beta_raw > np.pi/2, np.pi - beta_raw, beta_raw)
     new_params[:, 7] = np.where(beta_raw < -np.pi/2, -np.pi - beta_raw, beta_raw)
@@ -228,7 +221,7 @@ def generate_astrophysical_prior(catalog_params, num_samples):
     new_params[:, 8] = samples[7, :] % np.pi  #! psi needs to be in [0, pi]
     new_params[:, 9] = wrap_to_pi(samples[8, :])
     
-    # Spins (Fixed to 0 for debugging 9D ML setup)
+    
     new_params[:, 10] = 0.0
     new_params[:, 11] = 0.0 
     
@@ -357,7 +350,6 @@ def load_alberto_population(repo_path, pop_name="Pop3"):
                     elif ev['2modes_5p'][()] == 1: m = 2
                     elif ev['8modes_5p'][()] == 1: m = 8
                     
-                    # Find matching JSON to get the angles
                     matches = glob.glob(os.path.join(json_dir, f"*{int(stsi)}*.json"))
                     if not matches:
                         matches = glob.glob(os.path.join(json_dir, f"{int(stsi)}.json"))
@@ -585,7 +577,6 @@ class DatasetGenerator:
         modes = [(2,2), (2,1), (3,3), (3,2), (4,4), (4,3)]
         freqs_in = cp.asarray(self.freqs_gen) if self.use_gpu else self.freqs_gen
 
-        # 3. GENERATE (Using the SSB parameters for proper physics)
         wave_out = wave_gen(
             m1, m2, chi1, chi2, dist,
             phi_ref, f_ref, inc, lam_ssb, beta_ssb, psi_ssb, t_ref_ssb, 
@@ -597,7 +588,6 @@ class DatasetGenerator:
         wave_fd_A = wave_out[:, 0, :] 
         wave_fd_E = wave_out[:, 1, :]
         
-        # 4. PHASE SHIFT (Targeting Day 28.25 + Deltat)
         target_time_sec = (28.25 * 24.0 * 3600.0) + Deltat
         shift_time = target_time_sec - t_ref_ssb
         
@@ -605,7 +595,6 @@ class DatasetGenerator:
         wave_fd_A *= phase_shift
         wave_fd_E *= phase_shift
         
-        # 5. iFFT AND SLICE (Output exactly 11 parameters! Deltat replaces t_ref, L-frame angles retained!)
         if self.use_gpu:
             wave_td_A = cp.fft.irfft(wave_fd_A, n=self.N_gen, axis=-1)[:, -self.N_obs:]
             wave_td_E = cp.fft.irfft(wave_fd_E, n=self.N_gen, axis=-1)[:, -self.N_obs:]
